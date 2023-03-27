@@ -5,10 +5,6 @@ A simple Rust program to make a weight sum from HAProxy logs
 
 You're asking too many questions.
 
-# Build
-
-`go build -o go_sum main.go`
-
 # Usage
 
 `cargo run --release -- /path/to/your/log/folder`
