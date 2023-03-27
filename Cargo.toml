@@ -1,5 +1,5 @@
 [package]
-name = "komtuve_rust"
+name = "rust-haproxy-logs-parser"
 version = "0.1.0"
 edition = "2021"
 
