@@ -15,27 +15,12 @@ fn main() -> io::Result<()> {
     }
 
     let log_dir = &args[1];
-
     let size_pattern = Regex::new(r#"HTTP/1.1" 200 (\d+) "#).unwrap();
     let log_files = get_log_files(log_dir)?;
-
-    let start = Instant::now();
     let total_size = Arc::new(Mutex::new(0));
+    let start = Instant::now();
 
-    let mut handles = vec![];
-
-    for log_file in log_files {
-        let total_size = Arc::clone(&total_size);
-        let size_pattern = size_pattern.clone();
-
-        let handle = std::thread::spawn(move || {
-            let file_size = process_file(&log_file, &size_pattern).expect("Error processing file");
-            let mut total_size = total_size.lock().unwrap();
-            *total_size += file_size;
-        });
-
-        handles.push(handle);
-    }
+    let handles = spawn_threads(&log_files, &size_pattern, &total_size)?;
 
     for handle in handles {
         handle.join().unwrap();
@@ -64,6 +49,39 @@ fn get_log_files<P: AsRef<Path>>(log_dir: P) -> io::Result<Vec<String>> {
     Ok(log_files)
 }
 
+fn spawn_threads(
+    log_files: &[String],
+    size_pattern: &Regex,
+    total_size: &Arc<Mutex<i64>>,
+) -> io::Result<Vec<std::thread::JoinHandle<()>>> {
+    let mut handles = vec![];
+
+    for log_file in log_files {
+        let total_size = Arc::clone(total_size);
+        let size_pattern = size_pattern.clone();
+        let log_file = log_file.clone();
+
+        let handle = std::thread::spawn(move || {
+            let file_size = process_file(&log_file, &size_pattern).expect("Error processing file");
+            let mut total_size = total_size.lock().unwrap();
+            *total_size += file_size;
+        });
+
+        handles.push(handle);
+    }
+
+    Ok(handles)
+}
+
+fn extract_size_from_line(line: &str, size_pattern: &Regex) -> i64 {
+    size_pattern
+        .captures(line)
+        .and_then(|captures| captures.get(1))
+        .and_then(|matched_size| matched_size.as_str().parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+
 fn process_file<P: AsRef<Path>>(log_file: P, size_pattern: &Regex) -> io::Result<i64> {
     let start_time = Instant::now();
     let file = File::open(&log_file)?;
@@ -76,15 +94,9 @@ fn process_file<P: AsRef<Path>>(log_file: P, size_pattern: &Regex) -> io::Result
 
     let mut file_size = 0;
 
-    for line in reader.lines() {
+     for line in reader.lines() {
         let line = line?;
-        if let Some(captures) = size_pattern.captures(&line) {
-            if let Some(matched_size) = captures.get(1) {
-                if let Ok(size) = matched_size.as_str().parse::<i64>() {
-                    file_size += size;
-                }
-            }
-        }
+        file_size += extract_size_from_line(&line, size_pattern);
     }
 
     let elapsed_time = start_time.elapsed();
