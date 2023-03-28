@@ -3,9 +3,11 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use threadpool::ThreadPool;
 use std::time::Instant;
 
 use regex::Regex;
+
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -13,18 +15,18 @@ fn main() -> io::Result<()> {
         println!("Usage: log_size_rust <path-to-log-directory>");
         return Ok(());
     }
-
+    
     let log_dir = &args[1];
-    let size_pattern = Regex::new(r#"HTTP/1.1" 200 (\d+) "#).unwrap();
+    let size_pattern = Regex::new(r#""GET /[^"]*\.(?:jpeg|jpg|png) HTTP/1.1" 200 (\d+)"#).unwrap();
     let log_files = get_log_files(log_dir)?;
+    let number_of_threads = std::cmp::min(6, log_files.len());
     let total_size = Arc::new(Mutex::new(0));
     let start = Instant::now();
 
-    let handles = spawn_threads(&log_files, &size_pattern, &total_size)?;
+    let pool = ThreadPool::new(number_of_threads);
+    spawn_threads(&pool, &log_files, &size_pattern, &total_size)?;
 
-    for handle in handles {
-        handle.join().unwrap();
-    }
+    pool.join();
 
     let total_size = total_size.lock().unwrap();
     let duration = start.elapsed();
@@ -50,27 +52,25 @@ fn get_log_files<P: AsRef<Path>>(log_dir: P) -> io::Result<Vec<String>> {
 }
 
 fn spawn_threads(
+    pool: &ThreadPool,
     log_files: &[String],
     size_pattern: &Regex,
     total_size: &Arc<Mutex<i64>>,
-) -> io::Result<Vec<std::thread::JoinHandle<()>>> {
-    let mut handles = vec![];
-
+) -> io::Result<()> {
     for log_file in log_files {
         let total_size = Arc::clone(total_size);
         let size_pattern = size_pattern.clone();
         let log_file = log_file.clone();
 
-        let handle = std::thread::spawn(move || {
+        pool.execute(move || {
             let file_size = process_file(&log_file, &size_pattern).expect("Error processing file");
             let mut total_size = total_size.lock().unwrap();
             *total_size += file_size;
-        });
 
-        handles.push(handle);
+        });
     }
 
-    Ok(handles)
+    Ok(())
 }
 
 fn extract_size_from_line(line: &str, size_pattern: &Regex) -> i64 {
